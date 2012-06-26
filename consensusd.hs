@@ -1,20 +1,15 @@
 module Main (main) where
 
-import Network
-import Control.Concurrent
-import Control.Concurrent.STM
-import Control.Concurrent.STM.TVar
+import Network (PortID (..), withSocketsDo, listenOn, accept)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (TVar(..), atomically, newTVar, readTVar, modifyTVar) 
 import System.Environment (getArgs)
-import System.IO
+import System.IO (hPutStrLn, hGetLine, hFlush)
 
 import qualified Data.Map as M
 
 type Key = String
 type Revision = Int
-
-data PrepareResponse = Nack Key Revision
-                     | Prepared Key Revision
-                     deriving (Show, Eq)
 
 data Entry = Prepare Revision
 
@@ -53,6 +48,10 @@ command entries ["PREPARE", k, r] =
   return . show
 
 command _ cmd = return $ "Unknown command " ++ (unwords cmd)
+
+data PrepareResponse = Nack Key Revision
+                     | Prepared Key Revision
+                     deriving (Show, Eq)
 
 prepare rep k r = atomically $ do
   d <- readTVar rep     

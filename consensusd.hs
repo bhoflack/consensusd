@@ -2,10 +2,23 @@ module Main (main) where
 
 import Network
 import Control.Concurrent
+import Control.Concurrent.STM
+import Control.Concurrent.STM.TVar
 import System.Environment (getArgs)
 import System.IO
 
 import qualified Data.Map as M
+
+type Key = String
+type Revision = Int
+
+data PrepareResponse = Nack Key Revision
+                     | Prepared Key Revision
+                     deriving (Show, Eq)
+
+data Entry = Prepare Revision
+
+type Repository = TVar (M.Map String Entry)
 
 main = do
   args <- getArgs
@@ -17,34 +30,41 @@ usage = putStrLn "Usage: consensusd <<port number>>"
 
 
 listen port = withSocketsDo $ do
+  entries <- atomically $ newTVar M.empty
   sock <- listenOn (PortNumber (fromIntegral port))
-  acceptLoop sock
+  acceptLoop entries sock
 
-acceptLoop sock = do
+acceptLoop entries sock = do
   (h, _, _) <- accept sock
-  forkIO $ handle h
-  acceptLoop sock
+  forkIO $ handle entries h
+  acceptLoop entries sock
 
-handle h = do
+handle entries h = do
     line <- hGetLine h
-    hPutStrLn h (runCommand line)
+    response <- runCommand line
+    hPutStrLn h response
     hFlush h
-    handle h
-  where runCommand = command . words
+    handle entries h
+  where runCommand = (command entries) . words
 
-command :: [String] -> String
-command ["PREPARE", k, r] =
-    show $ prepare d k (read r) 
-  where d = M.empty
-command cmd = "Unknown command " ++ (unwords cmd)
+command :: Repository -> [String] -> IO String
+command entries ["PREPARE", k, r] =
+  prepare entries k (read r) >>= 
+  return . show
 
-type Key = String
-type Revision = Int
+command _ cmd = return $ "Unknown command " ++ (unwords cmd)
 
-data PrepareResponse = Nack Key Revision
-                     | Prepared Key Revision
-                     deriving (Show, Eq)
+prepare rep k r = atomically $ do
+  d <- readTVar rep     
+  case (M.lookup k d) of
+    Nothing -> do
+           modifyTVar rep (M.insert k entry) 
+           return $ Prepared k r
+         where entry = Prepare r
+    Just (Prepare p) -> if p >= r 
+                        then return $ Nack k r 
+                        else do  
+                            modifyTVar rep (M.insert k entry)
+                            return $ Prepared k r
+                          where entry = Prepare r
 
-prepare d k r = 
-   case (M.lookup k d) of
-    _ -> Nack k r

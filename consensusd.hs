@@ -2,7 +2,7 @@ module Main (main) where
 
 import Network (PortID (..), withSocketsDo, listenOn, accept)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (TVar(..), atomically, newTVar, readTVar, modifyTVar)
+import Control.Concurrent.STM (TVar(..), STM, atomically, newTVar, readTVar, writeTVar)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 (pack)
 import System.Environment (getArgs)
@@ -61,6 +61,11 @@ command _ cmd = return $ "Unknown command " ++ (unwords cmd)
 data PrepareResponse = Nack Key Revision
                      | Prepared Key Revision
                      deriving (Show, Eq)
+
+modifyTVar :: TVar a -> (a -> a) -> STM ()
+modifyTVar var f = do
+  x <- readTVar var
+  writeTVar var (f x)
 
 prepare rep k r = atomically $ do
   d <- readTVar rep     

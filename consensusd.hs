@@ -8,15 +8,16 @@ import Data.ByteString.Char8 (pack)
 import System.Environment (getArgs)
 import System.IO (hPutStrLn, hGetLine, hFlush)
 
+
 import qualified Data.Map as M
 
 type Key = String
 type Revision = Int
 type Content = ByteString
+type Listener = Key -> Revision -> Content -> IO ()
 
-data Entry = Prepare Revision
-           | Accept Revision Content (Maybe Revision)
-           deriving (Eq, Show)
+data Entry = Prepare Revision [Listener]
+           | Accept Revision Content (Maybe Revision) [Listener]
 
 type Repository = TVar (M.Map String Entry)
 
@@ -73,43 +74,43 @@ prepare rep k r = atomically $ do
     Nothing -> do
            modifyTVar rep (M.insert k entry) 
            return $ Prepared k r
-         where entry = Prepare r
-    Just (Prepare p) -> if p >= r 
+         where entry = Prepare r []
+    Just (Prepare p ls) -> if p >= r 
                         then return $ Nack k p 
                         else do  
                             modifyTVar rep (M.insert k entry)
                             return $ Prepared k r
-                          where entry = Prepare r
-    Just (Accept ar ac Nothing) -> if ar >= r
+                          where entry = Prepare r ls
+    Just (Accept ar ac Nothing ls) -> if ar >= r
                                    then return $ Nack k ar
                                    else do
                                        modifyTVar rep (M.insert k entry)
                                        return $ Prepared k r
-                                      where entry = Accept ar ac (Just r)
-    Just (Accept ar ac (Just ap)) -> if ap >= r
+                                      where entry = Accept ar ac (Just r) ls
+    Just (Accept ar ac (Just ap) ls) -> if ap >= r
                               then return $ Nack k ap
                               else do
                                   modifyTVar rep (M.insert k entry)
                                   return $ Prepared k r
-                                 where entry = Accept ar ac (Just r)
+                                 where entry = Accept ar ac (Just r) ls
 
 data AcceptResponse = AcceptNack Key Revision
                     | NoPromise Key
                     | Accepted Key Revision Content
                     deriving (Show, Eq)
 
-accept' rep k r c = atomically $ do
+accept' rep k r c = atomically (do
   d <- readTVar rep
   case (M.lookup k d) of
     Nothing -> return $ NoPromise k
-    Just (Prepare p) -> if p == r
-                        then let entry = Accept r c Nothing in do
+    Just (Prepare p ls) -> if p == r
+                        then let entry = Accept r c Nothing ls in do
                              modifyTVar rep (M.insert k entry)
                              return $ Accepted k r c
                         else return $ AcceptNack k p
-    Just (Accept ar _ Nothing) -> return $ AcceptNack k ar
-    Just (Accept _ _ (Just ap)) -> if ap == r
-                                     then let entry = Accept r c Nothing in do
+    Just (Accept ar _ Nothing ls) -> return $ AcceptNack k ar
+    Just (Accept _ _ (Just ap) ls) -> if ap == r
+                                     then let entry = Accept r c Nothing ls in do
                                            modifyTVar rep (M.insert k entry)
                                            return $ Accepted k r c
-                                     else return $ AcceptNack k ap
+                                     else return $ AcceptNack k ap)

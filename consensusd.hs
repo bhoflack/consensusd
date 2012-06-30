@@ -99,18 +99,24 @@ data AcceptResponse = AcceptNack Key Revision
                     | Accepted Key Revision Content
                     deriving (Show, Eq)
 
-accept' rep k r c = atomically (do
-  d <- readTVar rep
+accept' rep k r c = do 
+  d <- atomically $ readTVar rep
   case (M.lookup k d) of
     Nothing -> return $ NoPromise k
-    Just (Prepare p ls) -> if p == r
-                        then let entry = Accept r c Nothing ls in do
-                             modifyTVar rep (M.insert k entry)
-                             return $ Accepted k r c
-                        else return $ AcceptNack k p
+    Just (Prepare p ls) -> 
+      if p == r
+      then let entry = Accept r c Nothing ls in 
+      do
+        atomically $ modifyTVar rep (M.insert k entry)
+	mapM_ (\f -> f k r c) ls
+        return $ Accepted k r c
+      else return $ AcceptNack k p
     Just (Accept ar _ Nothing ls) -> return $ AcceptNack k ar
-    Just (Accept _ _ (Just ap) ls) -> if ap == r
-                                     then let entry = Accept r c Nothing ls in do
-                                           modifyTVar rep (M.insert k entry)
-                                           return $ Accepted k r c
-                                     else return $ AcceptNack k ap)
+    Just (Accept _ _ (Just ap) ls) -> 
+      if ap == r
+      then let entry = Accept r c Nothing ls in 
+      do
+        atomically $ modifyTVar rep (M.insert k entry)
+        mapM_ (\f -> f k r c) ls
+        return $ Accepted k r c
+      else return $ AcceptNack k ap

@@ -4,7 +4,7 @@ import Network (PortID (..), withSocketsDo, listenOn, accept)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (TVar(..), STM, atomically, newTVar, readTVar, writeTVar)
 import Data.ByteString (ByteString)
-import Data.ByteString.Char8 (pack)
+import Data.ByteString.Char8 (pack, unpack)
 import System.Environment (getArgs)
 import System.IO (hPutStrLn, hGetLine, hFlush)
 
@@ -18,6 +18,7 @@ type Listener = Key -> Revision -> Content -> IO ()
 
 data Entry = Prepare Revision [Listener]
            | Accept Revision Content (Maybe Revision) [Listener]
+           | NoEntry [Listener]
 
 type Repository = TVar (M.Map String Entry)
 
@@ -57,6 +58,15 @@ command entries ["ACCEPT", k, r, c] =
   accept' entries k (read r) (pack c) >>=
   return . show
 
+command entries ["LISTEN", k] =
+  follow entries k (\k _ _ -> putStrLn ("comitted " ++ k)) >>
+  return "OK"
+
+command entries ["GET", k] =
+  get' entries k >>= \e ->
+  return $ maybe "NOT FOUND" unpack e
+
+
 command _ cmd = return $ "Unknown command " ++ (unwords cmd)
 
 data PrepareResponse = Nack Key Revision
@@ -93,6 +103,10 @@ prepare rep k r = atomically $ do
                                   modifyTVar rep (M.insert k entry)
                                   return $ Prepared k r
                                  where entry = Accept ar ac (Just r) ls
+    Just (NoEntry ls) -> do
+        modifyTVar rep (M.insert k entry)
+        return $ Prepared k r
+      where entry = Prepare r ls
 
 data AcceptResponse = AcceptNack Key Revision
                     | NoPromise Key
@@ -120,3 +134,27 @@ accept' rep k r c = do
         mapM_ (\f -> f k r c) ls
         return $ Accepted k r c
       else return $ AcceptNack k ap
+    Just (NoEntry ls) -> return $ NoPromise k
+
+follow rep k cb = do
+  d <- atomically $ readTVar rep
+  atomically $ case (M.lookup k d) of
+    Nothing -> 
+        modifyTVar rep (M.insert k entry)
+      where entry = NoEntry [cb]
+    Just (NoEntry ls) ->
+        modifyTVar rep (M.insert k entry)
+      where entry = NoEntry (cb : ls)
+    Just (Prepare p ls) ->
+        modifyTVar rep (M.insert k entry)
+      where entry = Prepare p (cb : ls)
+    Just (Accept r c p ls) ->
+        modifyTVar rep (M.insert k entry)
+      where entry = Accept r c p (cb : ls)
+
+get' rep k = do
+  d <- atomically $ readTVar rep
+  case (M.lookup k d) of
+    Just (Accept r c _ _) -> return $ Just c
+    _ -> return $ Nothing
+        
